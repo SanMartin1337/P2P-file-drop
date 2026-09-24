@@ -1,0 +1,18 @@
+# Виртуальное окружение
+venv/
+.venv/
+
+# Python кэш
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+
+# Переменные окружения (секреты)
+.env
+
+# OS-специфичные файлы
+.DS_Store
+Thumbs.db

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>
+        WebSocket Test
+    </title>
+</head>
+<body>
+    <h1>WebSocket Test</h1>
+    <input type="text" id="messageInput" placeholder="Введите сообщение">
+    <button onclick="sendMessage()">отправить</button>
+    <ul id="messages"></ul>
+
+    <script>
+        const ws = new WebSocket("ws://127.0.0.1:8000/ws")
+        ws.onopen = () => {
+            console.log("соединение установлено");
+        };
+        ws.onmessage = (event) => {
+            const messageslist = document.getElementById("messages");
+            const item = document.createElement("li");
+            item.textContent = event.data;
+            messageslist.appendChild(item);
+        };
+        ws.onclose = () => {
+            console.log("Соединение закрыто");
+        };
+
+        function sendMessage() {
+            const input = document.getElementById("messageInput");
+            ws.send(input.value);
+            input.value = "";
+        };
+
+    </script>
+</body>
+</html>
