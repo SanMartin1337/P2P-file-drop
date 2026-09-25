@@ -1,10 +1,31 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uuid # библиотека для генерации идентификаторов
+# компонент FastApi который добавляет заголовки для разрешения кросс-доменых запросов
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # теперь есть ключи/ID и список клиентов, что находятся в этой комнате
 rooms: dict[str, list[WebSocket]] = {}
 #endpoint который принимает WS подключения
+
+@app.post("/create_room")
+async def create_room():
+    # генерация случайного идентификатора
+    room_id = str(uuid.uuid4())[:8]
+    rooms[room_id] = []
+    """
+    FastAPI автоматически превратит этот Python-словарь в JSON-ответ.
+    Клиент получит что-то вроде {"room_id": "a1b2c3d4"}
+    """
+    return {"room_id": room_id}
+
 @app.websocket("/ws/{room_id}") # добавление пути для FastAPI {room_id}
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()

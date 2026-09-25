@@ -8,31 +8,51 @@
 </head>
 <body>
     <h1>WebSocket Test</h1>
+    <p id="roomInfo">Подключение...</p>
     <input type="text" id="messageInput" placeholder="Введите сообщение">
     <button onclick="sendMessage()">отправить</button>
     <ul id="messages"></ul>
 
     <script>
-        const ws = new WebSocket("ws://127.0.0.1:8000/ws/testroom");
-        ws.onopen = () => {
-            console.log("соединение установлено");
-        };
-        ws.onmessage = (event) => {
-            const messageslist = document.getElementById("messages");
-            const item = document.createElement("li");
-            item.textContent = event.data;
-            messageslist.appendChild(item);
-        };
-        ws.onclose = () => {
-            console.log("Соединение закрыто");
-        };
+        let ws;
+
+        async function createAndJoinRoom() {
+            const response = await fetch("http://127.0.0.1:8000/create_room", {
+                method: "POST"
+            });
+            const data = await response.json();
+            const roomId = data.room_id;
+
+            document.getElementById("roomInfo").textContent = "Комната: " + roomId;
+
+            connectToRoom(roomId);
+        }
+
+        function connectToRoom(roomId) {
+            ws = new WebSocket(`ws://127.0.0.1:8000/ws/${roomId}`);
+            ws.onopen = () => {
+                console.log("соединение установлено, комната: ", roomId);
+            };
+
+            ws.onmessage = (event) => {
+                const messageslist = document.getElementById("messages");
+                const item = document.createElement("li");
+                item.textContent = event.data;
+                messageslist.appendChild(item);
+            };
+            ws.onclose = () => {
+                console.log("Соединение закрыто");
+            };
+        }
+
 
         function sendMessage() {
             const input = document.getElementById("messageInput");
             ws.send(input.value);
             input.value = "";
-        };
+        }
 
+        connectToRoom("8ae1a7ae");
     </script>
 </body>
 </html>
