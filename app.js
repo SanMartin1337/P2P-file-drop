@@ -72,6 +72,10 @@ function enterChatScreen(roomId) {
     document.getElementById("chatScreen").style.display = "block";
     document.getElementById("roomInfo").textContent = "комната: " + roomId;
 }
+
+let receivingFile = null;
+let receivedChunks = []
+
 function connectToRoom(roomId) {
     ws = new WebSocket(`ws://127.0.0.1:8000/ws/${roomId}`);
     ws.onopen = () => {
@@ -79,16 +83,65 @@ function connectToRoom(roomId) {
     };
 
     ws.onmessage = (event) => {
-        const messageslist = document.getElementById("messages");
-        const item = document.createElement("li");
-        item.textContent = event.data;
-        messageslist.appendChild(item);
+        if (typeof event.data === "string") {
+            handleTextMessage(event.data);
+        } else {
+            handleBinaryChunk(event.data);
+        }
     };
     ws.onclose = () => {
         console.log("Соединение закрыто");
     };
 }
 
+function handleTextMessage(text) {
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    } catch (e) {
+        parsed = null
+    }
+    if (parsed && parsed.type === "file_meta"){
+        receivingFile = parsed;
+        receivedChunks = [];
+        document.getElementById("progressInfo").textContent =
+            `получаем файл ${parsed.name} (0%)`;
+        return;
+    }
+
+    const messagesList = document.getElementById("messages")
+    const item = document.createElement("li")
+    item.textContent = text;
+    messagesList.appendChild(item);
+}
+
+async function handleBinaryChunk(blob) {
+    receivedChunks.push(blob);
+
+    const progress = Math.round((receivedChunks.length / receivingFile.totalChunks) * 100);
+    document.getElementById("progressInfo").textContent =
+        `Получаем файл: ${receivingFile.name} (${progress}%)`;
+
+    if (receivedChunks.length === receivingFile.totalChunks) {
+        finishReceivingFile();
+    }
+}
+
+function finishReceivingFile() {
+    const fileBlob = new Blob(receivedChunks);
+    const url = URL.createObjectURL(fileBlob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = receivingFile.name;
+    link.textContent = `Скачать ${receivingFile.name}`;
+
+    document.getElementById("progressInfo").appendChild(document.createElement("br"));
+    document.getElementById("progressInfo").appendChild(link);
+
+    receivingFile = null;
+    receivedChunks = [];
+}
 
 function sendMessage() {
     const input = document.getElementById("messageInput");
