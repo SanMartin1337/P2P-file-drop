@@ -36,13 +36,23 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
     try:
         while True:
-            #ждем сообщение от клиента
-            message = await websocket.receive_text()
+            #ждем сообщение/файл от клиента
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+
             for client in rooms[room_id]: # переборка подключенных
                 # пропускаем самого отправителя(не отправляем эхом его же сообщение
                 if client != websocket:
-                    await client.send_text(message) # пересылаем сообщение всем
+                    # проверяем есть ли текстовое сообщение
+                    if "text" in message:
+                        await client.send_text(message["text"])
+                    # иначе если бинарные данные
+                    elif "bytes" in message:
+                        await client.send_bytes(message["bytes"])
     except WebSocketDisconnect:
+        pass
+    finally:
         # отключение клиента из списка
         rooms[room_id].remove(websocket)
         if not rooms[room_id]:
