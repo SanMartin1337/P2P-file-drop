@@ -148,3 +148,24 @@ function sendMessage() {
     ws.send(input.value);
     input.value = "";
 }
+
+async function testGenerateKeys() {
+    const keyPair = await crypto.subtle.generateKey(
+        {
+            name: "ECDH",
+            namedCurve: "P-256"
+        },
+        true,
+        ["deriveKey", "deriveBits"]
+
+    );
+
+    console.log("пара ключей сгенерирована", keyPair);
+    console.log("приватный ключ", keyPair.privateKey);
+    console.log("публичный ключ", keyPair.publicKey);
+
+    const exportedPublicKey = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+    console.log("пбличный ключ в виде байтов:", new Uint8Array(exportedPublicKey));
+}
+
+testGenerateKeys();
