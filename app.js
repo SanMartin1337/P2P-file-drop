@@ -12,6 +12,11 @@ async function sendFile() {
         return;
     }
 
+    if (!sharedSecretKey) {
+    alert("защищённый канал ещё не установлен, подожди секунду");
+    return;
+    }
+
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     const meta = {
@@ -31,7 +36,8 @@ async function sendFile() {
         // превращаем Blob в реальные байты
         const chunkArrayBuffer = await chunkBlob.arrayBuffer();
         // отправка бинарного чанка
-        ws.send(chunkArrayBuffer);
+        const encrypted = await encryptChunk(chunkArrayBuffer);
+        ws.send(encrypted);
 
         // прогресс бар
         const progress = Math.round(((i + 1) / totalChunks) * 100);
@@ -51,6 +57,7 @@ async function handleCreateRoom(){
     const roomId = data.room_id;
 
     enterChatScreen(roomId);
+    isCreator = true;
     connectToRoom(roomId);
 }
 
@@ -64,6 +71,7 @@ function handleJoinRoom(){
     }
 
     enterChatScreen(roomId);
+    isCreator = false;
     connectToRoom(roomId);
 }
 
@@ -75,11 +83,19 @@ function enterChatScreen(roomId) {
 
 let receivingFile = null;
 let receivedChunks = []
+let isCreator = false;
+let keysReady = null;
 
 function connectToRoom(roomId) {
+    keysReady = generateMyKeys();
+
     ws = new WebSocket(`ws://127.0.0.1:8000/ws/${roomId}`);
-    ws.onopen = () => {
+    ws.onopen = async () => {
         console.log("соединение установлено, комната: ", roomId);
+        if (!isCreator) {
+            await keysReady;
+            await sendMyPublicKey();
+        }
     };
 
     ws.onmessage = (event) => {
@@ -104,9 +120,15 @@ function handleTextMessage(text) {
     if (parsed && parsed.type === "file_meta"){
         receivingFile = parsed;
         receivedChunks = [];
+        chunkCounter = 0;
+        decryptedCount = 0;
         document.getElementById("progressInfo").textContent =
             `получаем файл ${parsed.name} (0%)`;
         return;
+    }
+    if (parsed && parsed.type === "public_key") {
+    handlePublicKeyMessage(parsed.key);
+    return;
     }
 
     const messagesList = document.getElementById("messages")
@@ -115,14 +137,39 @@ function handleTextMessage(text) {
     messagesList.appendChild(item);
 }
 
-async function handleBinaryChunk(blob) {
-    receivedChunks.push(blob);
+async function handlePublicKeyMessage(keyArray) {
+    await keysReady;
+    await handleReceivedPublicKey(keyArray);
 
-    const progress = Math.round((receivedChunks.length / receivingFile.totalChunks) * 100);
+    if (isCreator) {
+        await sendMyPublicKey();
+    }
+}
+
+let chunkCounter = 0;
+let decryptedCount = 0;
+
+async function handleBinaryChunk(blob) {
+    const index = chunkCounter++;
+
+    let decrypted;
+    try {
+        decrypted = await decryptChunk(blob);
+    } catch (e) {
+        console.error("Не удалось расшифровать чанк", index, e);
+        document.getElementById("progressInfo").textContent =
+            "Ошибка: чанк повреждён или ключи не совпали";
+        return;
+    }
+
+    receivedChunks[index] = decrypted;
+    decryptedCount++;
+
+    const progress = Math.round((decryptedCount / receivingFile.totalChunks) * 100);
     document.getElementById("progressInfo").textContent =
         `Получаем файл: ${receivingFile.name} (${progress}%)`;
 
-    if (receivedChunks.length === receivingFile.totalChunks) {
+    if (decryptedCount === receivingFile.totalChunks) {
         finishReceivingFile();
     }
 }
@@ -149,23 +196,90 @@ function sendMessage() {
     input.value = "";
 }
 
-async function testGenerateKeys() {
-    const keyPair = await crypto.subtle.generateKey(
+let myKeyPair = null;
+let sharedSecretKey = null;
+
+async function generateMyKeys() {
+    myKeyPair = await crypto.subtle.generateKey(
         {
             name: "ECDH",
             namedCurve: "P-256"
         },
         true,
         ["deriveKey", "deriveBits"]
-
     );
-
-    console.log("пара ключей сгенерирована", keyPair);
-    console.log("приватный ключ", keyPair.privateKey);
-    console.log("публичный ключ", keyPair.publicKey);
-
-    const exportedPublicKey = await crypto.subtle.exportKey("raw", keyPair.publicKey);
-    console.log("пбличный ключ в виде байтов:", new Uint8Array(exportedPublicKey));
+    console.log("Мои ключи сгенерированы");
 }
 
-testGenerateKeys();
+async function sendMyPublicKey() {
+    const exported = await crypto.subtle.exportKey("raw", myKeyPair.publicKey);
+    const asArray = Array.from(new Uint8Array(exported));
+
+    const message = {
+        type: "public_key",
+        key: asArray
+    };
+    ws.send(JSON.stringify(message));
+    console.log("Отправил свой публичный ключ");
+}
+
+async function handleReceivedPublicKey(keyArray) {
+    const keyBytes = new Uint8Array(keyArray);
+
+    const theirPublicKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        []
+    );
+
+    sharedSecretKey = await crypto.subtle.deriveKey(
+        {
+            name: "ECDH",
+            public: theirPublicKey
+        },
+        myKeyPair.privateKey,
+        {
+            name: "AES-GCM",
+            length: 256
+        },
+        false,
+        ["encrypt", "decrypt"]
+    );
+
+    console.log("Общий секретный ключ вычислен:", sharedSecretKey);
+}
+
+async function encryptChunk(plainBuffer) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+
+    const cipherBuffer = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        sharedSecretKey,
+        plainBuffer
+    );
+
+    const result = new Uint8Array(12 + cipherBuffer.byteLength);
+    result.set(iv, 0);
+    result.set(new Uint8Array(cipherBuffer), 12);
+    return result;
+}
+
+async function decryptChunk(blob) {
+    const buffer = await blob.arrayBuffer();
+
+    const iv = new Uint8Array(buffer.slice(0, 12));
+    const cipherBuffer = buffer.slice(12);
+
+    return await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        sharedSecretKey,
+        cipherBuffer
+    );
+
+}
+
+
+
+
