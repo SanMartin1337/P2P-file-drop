@@ -105,8 +105,14 @@ function connectToRoom(roomId) {
             handleBinaryChunk(event.data);
         }
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+    if (event.code === 4000) {
+        alert("Комната уже занята двумя участниками");
+        document.getElementById("chatScreen").style.display = "none";
+        document.getElementById("setupScreen").style.display = "block";
+    } else {
         console.log("Соединение закрыто");
+    }
     };
 }
 

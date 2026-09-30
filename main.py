@@ -26,6 +26,41 @@ async def create_room():
     """
     return {"room_id": room_id}
 
+MAX_CLIENTS_PER_ROOM = 2
+
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    if room_id in rooms and len(rooms[room_id]) >= MAX_CLIENTS_PER_ROOM:
+        await websocket.accept()
+        await websocket.close(code=4000, reason="room is full")
+        return
+
+    await websocket.accept()
+
+    if room_id not in rooms:
+        rooms[room_id] = []
+    rooms[room_id].append(websocket)
+
+    try:
+        while True:
+            message = await websocket.receive()
+
+            if message["type"] == "websocket.disconnect":
+                break
+
+            for client in rooms[room_id]:
+                if client != websocket:
+                    if "text" in message:
+                        await client.send_text(message["text"])
+                    elif "bytes" in message:
+                        await client.send_bytes(message["bytes"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        rooms[room_id].remove(websocket)
+        if not rooms[room_id]:
+            del rooms[room_id]
+
 @app.websocket("/ws/{room_id}") # добавление пути для FastAPI {room_id}
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()
