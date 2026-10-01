@@ -4,8 +4,7 @@ const CHUNK_SIZE = 16 * 1024; // 16 kb размерность 1 чанка
 
 async function sendFile() {
     const fileInput = document.getElementById("fileInput");
-    const file = fileInput.files[0]
-
+    const file = fileInput.files[0];
 
     if (!file) {
         alert("сперва выберите файл");
@@ -13,8 +12,8 @@ async function sendFile() {
     }
 
     if (!sharedSecretKey) {
-    alert("защищённый канал ещё не установлен, подожди секунду");
-    return;
+        alert("защищённый канал ещё не установлен, подожди секунду");
+        return;
     }
 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -23,30 +22,26 @@ async function sendFile() {
         type: "file_meta",
         name: file.name,
         size: file.size,
-        totalChunks:totalChunks
+        totalChunks: totalChunks
     };
+    const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
+    const encryptedMeta = await encryptPayload(MSG_TYPE_FILE_META, metaBytes);
+    ws.send(encryptedMeta);
 
-    ws.send(JSON.stringify(meta));
-
-    for(let i = 0; i<totalChunks; i++){
+    for (let i = 0; i < totalChunks; i++) {
         const start = i * CHUNK_SIZE;
-        // берём меньшее из двух значений: либо ровно на CHUNK_SIZE дальше, либо конец файла
         const end = Math.min(start + CHUNK_SIZE, file.size);
-        const chunkBlob = file.slice(start,end)
-        // превращаем Blob в реальные байты
+        const chunkBlob = file.slice(start, end);
         const chunkArrayBuffer = await chunkBlob.arrayBuffer();
-        // отправка бинарного чанка
-        const encrypted = await encryptChunk(chunkArrayBuffer);
+
+        const encrypted = await encryptPayload(MSG_TYPE_FILE_CHUNK, chunkArrayBuffer);
         ws.send(encrypted);
 
-        // прогресс бар
         const progress = Math.round(((i + 1) / totalChunks) * 100);
         document.getElementById("progressInfo").textContent = `отправлено: ${progress}%`;
     }
 
-    document.getElementById("progressInfo").textContent = "файл отправлен "
-
-
+    document.getElementById("progressInfo").textContent = "файл отправлен";
 }
 
 async function handleCreateRoom(){
@@ -102,7 +97,7 @@ function connectToRoom(roomId) {
         if (typeof event.data === "string") {
             handleTextMessage(event.data);
         } else {
-            handleBinaryChunk(event.data);
+            handleEncryptedMessage(event.data);
         }
     };
     ws.onclose = (event) => {
@@ -114,28 +109,86 @@ function connectToRoom(roomId) {
         console.log("Соединение закрыто");
     }
     };
+    function connectToRoom(roomId) {
+    keysReady = generateMyKeys();
+
+    ws = new WebSocket(`ws://127.0.0.1:8000/ws/${roomId}`);
+    ws.binaryType = "arraybuffer";
+
 }
+
+function handleEncryptedMessage(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const typeByte = bytes[0];
+
+    let index = null;
+    if (typeByte === MSG_TYPE_FILE_CHUNK) {
+        index = chunkCounter++;
+    }
+
+    decryptAndHandle(arrayBuffer, typeByte, index);
+}
+
+async function decryptAndHandle(arrayBuffer, typeByte, index) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const iv = bytes.slice(1, 13);
+    const cipherBuffer = bytes.slice(13);
+
+    let plainBuffer;
+    try {
+        plainBuffer = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: iv },
+            sharedSecretKey,
+            cipherBuffer
+        );
+    } catch (e) {
+        console.error("Не удалось расшифровать сообщение", e);
+        return;
+    }
+
+    if (typeByte === MSG_TYPE_FILE_META) {
+        const text = new TextDecoder().decode(plainBuffer);
+        receivingFile = JSON.parse(text);
+        receivedChunks = [];
+        chunkCounter = 0;
+        decryptedCount = 0;
+        document.getElementById("progressInfo").textContent =
+            `получаем файл ${receivingFile.name} (0%)`;
+
+    } else if (typeByte === MSG_TYPE_CHAT) {
+        const text = new TextDecoder().decode(plainBuffer);
+        const messagesList = document.getElementById("messages");
+        const item = document.createElement("li");
+        item.textContent = text;
+        messagesList.appendChild(item);
+
+    } else if (typeByte === MSG_TYPE_FILE_CHUNK) {
+        receivedChunks[index] = plainBuffer;
+        decryptedCount++;
+
+        const progress = Math.round((decryptedCount / receivingFile.totalChunks) * 100);
+        document.getElementById("progressInfo").textContent =
+            `Получаем файл: ${receivingFile.name} (${progress}%)`;
+
+        if (decryptedCount === receivingFile.totalChunks) {
+            finishReceivingFile();
+        }
+    }
+}
+
 
 function handleTextMessage(text) {
     let parsed;
     try {
         parsed = JSON.parse(text);
     } catch (e) {
-        parsed = null
+        parsed = null;
     }
-    if (parsed && parsed.type === "file_meta"){
-        receivingFile = parsed;
-        receivedChunks = [];
-        chunkCounter = 0;
-        decryptedCount = 0;
-        document.getElementById("progressInfo").textContent =
-            `получаем файл ${parsed.name} (0%)`;
-        return;
-    }
+
     if (parsed && parsed.type === "public_key") {
-    handlePublicKeyMessage(parsed.key);
-    return;
+        handlePublicKeyMessage(parsed.key);
     }
+}
 
     const messagesList = document.getElementById("messages")
     const item = document.createElement("li")
@@ -155,30 +208,7 @@ async function handlePublicKeyMessage(keyArray) {
 let chunkCounter = 0;
 let decryptedCount = 0;
 
-async function handleBinaryChunk(blob) {
-    const index = chunkCounter++;
 
-    let decrypted;
-    try {
-        decrypted = await decryptChunk(blob);
-    } catch (e) {
-        console.error("Не удалось расшифровать чанк", index, e);
-        document.getElementById("progressInfo").textContent =
-            "Ошибка: чанк повреждён или ключи не совпали";
-        return;
-    }
-
-    receivedChunks[index] = decrypted;
-    decryptedCount++;
-
-    const progress = Math.round((decryptedCount / receivingFile.totalChunks) * 100);
-    document.getElementById("progressInfo").textContent =
-        `Получаем файл: ${receivingFile.name} (${progress}%)`;
-
-    if (decryptedCount === receivingFile.totalChunks) {
-        finishReceivingFile();
-    }
-}
 
 function finishReceivingFile() {
     const fileBlob = new Blob(receivedChunks);
@@ -196,9 +226,14 @@ function finishReceivingFile() {
     receivedChunks = [];
 }
 
-function sendMessage() {
+async function sendMessage() {
     const input = document.getElementById("messageInput");
-    ws.send(input.value);
+    const text = input.value;
+
+    const textBytes = new TextEncoder().encode(text);
+    const encrypted = await encryptPayload(MSG_TYPE_CHAT, textBytes);
+    ws.send(encrypted);
+
     input.value = "";
 }
 
@@ -257,7 +292,11 @@ async function handleReceivedPublicKey(keyArray) {
     console.log("Общий секретный ключ вычислен:", sharedSecretKey);
 }
 
-async function encryptChunk(plainBuffer) {
+const MSG_TYPE_FILE_CHUNK = 1;
+const MSG_TYPE_CHAT = 2;
+const MSG_TYPE_FILE_META = 3;
+
+async function encryptPayload(typeByte, plainBuffer) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
 
     const cipherBuffer = await crypto.subtle.encrypt(
@@ -266,25 +305,13 @@ async function encryptChunk(plainBuffer) {
         plainBuffer
     );
 
-    const result = new Uint8Array(12 + cipherBuffer.byteLength);
-    result.set(iv, 0);
-    result.set(new Uint8Array(cipherBuffer), 12);
+    const result = new Uint8Array(1 + 12 + cipherBuffer.byteLength);
+    result[0] = typeByte;
+    result.set(iv, 1);
+    result.set(new Uint8Array(cipherBuffer), 13);
     return result;
 }
 
-async function decryptChunk(blob) {
-    const buffer = await blob.arrayBuffer();
-
-    const iv = new Uint8Array(buffer.slice(0, 12));
-    const cipherBuffer = buffer.slice(12);
-
-    return await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: iv },
-        sharedSecretKey,
-        cipherBuffer
-    );
-
-}
 
 
 
